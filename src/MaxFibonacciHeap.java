@@ -1,19 +1,38 @@
+import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 
 public class MaxFibonacciHeap {
 
-    Set<String> hashtags = new HashSet<>();
-    private Node max;
+    /**
+     * Comparator used to find node having greater frequency of hashtag.
+     * If frequency is same for both the hashtags, then it is ordered as lexicographical order of hashtags.
+     */
+    public static final Comparator<Node> COMPARATOR = (a, b) -> {
+        if (a.frequency == b.frequency) return a.hashtag.compareTo(b.hashtag);
+        return Integer.compare(a.frequency, b.frequency);
+    };
 
+    /**
+     * Root node of heap
+     */
+    private Node root;
+
+    /**
+     * Inserts new node next to root element into existing fibonacci heap.
+     * Also updates root, if node is greater than root.
+     */
     public void insert(Node node) {
-        hashtags.add(node.hashtag);
-        if (max == null) max = node;
-        else max = meld(max, node);
+        root = meld(root, node);
     }
 
+    /**
+     * Joins two nodes and returns the pointer of max node b/w node1 and node2
+     *
+     * @param node1 1-2-3
+     * @param node2 4-5-6
+     * @return 1-4-5-6-2-3
+     */
     private Node meld(Node node1, Node node2) {
         if (node1 == null) return node2;
         if (node2 == null) return node1;
@@ -27,100 +46,135 @@ public class MaxFibonacciHeap {
         right.left = left;
         left.right = right;
 
-        return node1.value < node2.value ? node2 : node1;
+        return COMPARATOR.compare(node1, node2) > 0 ? node1 : node2;
     }
 
+    /**
+     * Removes max and do a pairwise combine of remaining tree in the heap
+     *
+     * @return Max node in the heap
+     */
     public Node removeMax() {
-        Map<Integer, Node> map = new HashMap<>();
+        if (root == null) throw new IllegalAccessError("Heap is empty");
 
-        Node result = max;
+        Map<Integer, Node> nodePerDegree = new HashMap<>();
 
-        Node startPairwiseCombineFromHere;
-        if (max.right == max) {
-            startPairwiseCombineFromHere = max.child;
+        Node result = root;
+
+        Node pairwiseCombineStartNode;
+        if (root.right == root) {
+            pairwiseCombineStartNode = root.child;
         } else {
-            Node rightOfMax = max.right;
-            mergeLeftRight(max);
+            Node rightOfMax = root.right;
+            removeFromSiblings(root);
 
-            startPairwiseCombineFromHere = meld(max.child != null ? max.child.left : null, rightOfMax);
+            pairwiseCombineStartNode = meld(root.child, rightOfMax);
         }
 
-        Node current = startPairwiseCombineFromHere;
+        Node current = pairwiseCombineStartNode;
+        root = null;
+        if (current == null) return result;
 
         do {
             Node currentDegree = current;
             current = current.right;
+
+            // Reset node config to consider as a single tree
             currentDegree.parent = null;
             currentDegree.left = currentDegree;
             currentDegree.right = currentDegree;
+            currentDegree.childCut = false;
 
-            while (map.containsKey(currentDegree.degree)) {
-                Node sameDegreeNode = map.remove(currentDegree.degree);
+            // Pairwise combine of two nodes having same degree iteratively
+            while (nodePerDegree.containsKey(currentDegree.degree)) {
+                Node existingDegreeNode = nodePerDegree.remove(currentDegree.degree);
 
-                if (sameDegreeNode.value > currentDegree.value) {
-                    sameDegreeNode.degree++;
-                    sameDegreeNode.child = meld(sameDegreeNode.child != null ? sameDegreeNode.child.left : null, currentDegree);
-                    currentDegree.parent = sameDegreeNode;
-                    currentDegree = sameDegreeNode;
+                if (COMPARATOR.compare(existingDegreeNode, currentDegree) > 0) {
+                    existingDegreeNode.degree++;
+                    existingDegreeNode.child = meld(existingDegreeNode.child != null ? existingDegreeNode.child.left : null, currentDegree);
+                    currentDegree.parent = existingDegreeNode;
+                    currentDegree = existingDegreeNode;
                 } else {
                     currentDegree.degree++;
-                    currentDegree.child = meld(currentDegree.child, sameDegreeNode);
-                    sameDegreeNode.parent = currentDegree;
+                    currentDegree.child = meld(currentDegree.child, existingDegreeNode);
+                    existingDegreeNode.parent = currentDegree;
                 }
             }
 
-            map.put(currentDegree.degree, currentDegree);
-        } while (current != startPairwiseCombineFromHere);
+            nodePerDegree.put(currentDegree.degree, currentDegree);
+        } while (current != pairwiseCombineStartNode);
 
-        max = null;
-
-        for (Node node : map.values()) insert(node);
+        // Insert nodes based on degree
+        for (Node node : nodePerDegree.values()) insert(node);
 
         return result;
     }
 
-    // TODO
+    /**
+     * Removes a provided node from the heap.
+     * It melds parent nodes on the top level through cascading cut.
+     */
     public void remove(Node node) {
+        if (node.right == node) {
+            if (node.parent != null) {
+                node.parent.child = null;
+                node.parent.degree--;
+            } else root = null;
+        } else {
+            if (node.parent != null) {
+                node.parent.degree--;
+                node.parent.child = node.right;
+            }
+            removeFromSiblings(node);
+        }
 
+        if (node.child != null) {
+            Node child = node.child;
+            Node current = child;
+
+            do {
+                current.parent = null;
+                current.childCut = false;
+                current = current.right;
+            } while (current != child);
+
+            meld(root, child);
+        }
+
+        // Cascading cut
+        if (node.parent != null) {
+            Node parent = node.parent;
+            while (parent.childCut) parent = removeAndReturnParent(parent, false);
+            parent.childCut = parent.parent != null;
+        }
     }
 
-    public void increaseKey(Node node, int value) {
-        node.value += value;
+    /**
+     * Increases provided nodes by provided frequency.
+     * If nodes frequency becomes greater than it's parent, then we implement cascading cut.
+     * i.e. We will meld the node it's parent and so on on the top level until child cut for parents are true or
+     * we reach at top level.
+     */
+    public void increaseKey(Node node, int frequency) {
+        node.frequency += frequency;
 
         Node parent = node.parent;
-        if (parent != null && node.value > node.parent.value) {
-            parent = removeAndReturnParent(node);
+        if (parent != null && node.frequency > node.parent.frequency) {
+            parent = removeAndReturnParent(node, true);
 
-            // TODO
-            while (parent.parent != null && parent.childCut) parent = removeAndReturnParent(parent);
+            while (parent.childCut) parent = removeAndReturnParent(parent, true);
 
             parent.childCut = parent.parent != null;
         }
 
-        if (max.value < node.value) max = node;
+        if (COMPARATOR.compare(root, node) < 0) root = node;
     }
 
-    public int getTotalNodes() {
-        return getTotalNodes(max);
-    }
-
-
-    private int getTotalNodes(Node node) {
-        if (node == null) return 0;
-        int totalNodes = 0;
-
-        Node current = node;
-
-        do {
-            totalNodes++;
-            totalNodes += getTotalNodes(current.child);
-            current = current.right;
-        } while (current != node);
-
-        return totalNodes;
-    }
-
-    private Node removeAndReturnParent(Node node) {
+    /**
+     * @param node      Removes node from the parent
+     * @param meldAtTop adds it to the top level list if true
+     */
+    private Node removeAndReturnParent(Node node, boolean meldAtTop) {
         Node parent = node.parent;
 
         node.parent = null;
@@ -131,14 +185,17 @@ public class MaxFibonacciHeap {
             parent.child = null;
         } else {
             parent.child = node.right;
-            mergeLeftRight(node);
+            removeFromSiblings(node);
         }
 
-        max = meld(max, node);
+        if (meldAtTop) root = meld(root, node);
         return parent;
     }
 
-    private void mergeLeftRight(Node node) {
+    /**
+     * @param node removes node from it's siblings
+     */
+    private void removeFromSiblings(Node node) {
         Node left = node.left;
         Node right = node.right;
 
@@ -147,36 +204,5 @@ public class MaxFibonacciHeap {
 
         node.left = node;
         node.right = node;
-    }
-
-    public void print() {
-        if (max != null) System.out.println("Max is : " + max);
-        int totalNodes = print(max, false);
-        System.out.println("Total Nodes are : " + totalNodes);
-    }
-
-    private int print(Node node, boolean previousWasMax) {
-        if (node == null) return 0;
-
-        int totalNodes = 0;
-
-        Node current = node;
-
-        do {
-            totalNodes++;
-            if (previousWasMax) System.out.print("( ");
-            System.out.print(current);
-            totalNodes += print(current.child, node == max);
-            current = current.right;
-            if (previousWasMax) System.out.print(" )");
-
-            if (node == max) {
-                System.out.println();
-                System.out.println();
-            }
-
-        } while (current != node);
-
-        return totalNodes;
     }
 }
